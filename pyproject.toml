@@ -25,6 +25,11 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 
+[project.urls]
+Homepage = "https://github.com/AICDEV/murmo"
+Repository = "https://github.com/AICDEV/murmo"
+Issues = "https://github.com/AICDEV/murmo/issues"
+
 [project.optional-dependencies]
 dev = ["pytest"]
 
