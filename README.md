@@ -2,6 +2,8 @@
 
 **Just talk — murmo turns your speech into text, right in your clipboard.**
 
+https://pypi.org/manage/project/murmo/releases/
+
 A small command-line tool that records audio from your microphone and transcribes it locally with [OpenAI Whisper](https://github.com/openai/whisper). Nothing is sent to the cloud: the model runs on your machine.
 
 Works on **macOS**, **Linux**, and **Windows**.
