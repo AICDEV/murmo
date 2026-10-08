@@ -60,21 +60,43 @@ winget install Gyan.FFmpeg
 
 ### 2. Install murmo
 
-From the project folder, pick one of the following.
+Pick one of the following.
 
-**As a global command (recommended)** — installs murmo into its own isolated environment and puts `murmo` on your PATH. Requires [pipx](https://pipx.pypa.io/) or [uv](https://docs.astral.sh/uv/):
+**From PyPI as a global command (recommended)** — installs murmo into its own isolated environment and puts `murmo` on your PATH. Requires [pipx](https://pipx.pypa.io/) or [uv](https://docs.astral.sh/uv/):
 
 ```bash
-pipx install .
+pipx install murmo
 # or
-uv tool install .
+uv tool install murmo
 ```
 
 To uninstall later: `pipx uninstall murmo` or `uv tool uninstall murmo`.
 
-**Into a virtual environment** — useful if you want to hack on the code:
+**With pip** — into the currently active (virtual) environment:
 
 ```bash
+pip install murmo
+```
+
+**Directly from GitHub** — e.g. to get the latest unreleased version:
+
+```bash
+pipx install git+https://github.com/AICDEV/murmo.git
+# or
+uv tool install git+https://github.com/AICDEV/murmo.git
+# or, into the active environment
+pip install git+https://github.com/AICDEV/murmo.git
+```
+
+Append `@v0.1.0` (or any tag, branch, or commit) to the URL to install a specific version.
+
+> **Note:** pip installs only the Python dependencies. FFmpeg and PortAudio (step 1) must be installed separately. Whisper pulls in PyTorch, so the first install is a few hundred MB.
+
+**From a local clone (for development)** — useful if you want to hack on the code:
+
+```bash
+git clone https://github.com/AICDEV/murmo.git
+cd murmo
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
