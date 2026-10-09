@@ -2,17 +2,17 @@
 
 **Just talk — murmo turns your speech into text, right in your clipboard.**
 
-https://pypi.org/manage/project/murmo/releases/
-
 A small command-line tool that records audio from your microphone and transcribes it locally with [OpenAI Whisper](https://github.com/openai/whisper). Nothing is sent to the cloud: the model runs on your machine.
 
 Works on **macOS**, **Linux**, and **Windows**.
 
 ## Features
 
-- **Auto-stop on silence** — recording starts when you speak; 3 seconds of silence after speaking stops it automatically
+- **Auto-stop on silence** — recording starts when you speak; by default, 3 seconds of silence after speaking stops it automatically
+- **Manual-stop mode** — disable silence auto-stop with `--no-silence-stop` when you want to stop explicitly with Enter
 - **Append mode** — chain multiple recordings into a single transcript file (perfect for meetings)
 - **Punctuation enhancement** — nudge Whisper towards proper punctuation and capitalization with a punctuated initial prompt
+- **Benchmark mode** — measure Whisper transcription time over repeated runs, useful for model comparisons
 - **Clipboard copy** — the transcript is copied to the clipboard automatically, no manual Cmd+C needed (`--no-clipboard` to disable)
 - **Plain terminal output** — the transcript is printed as-is, easy to copy
 
@@ -117,7 +117,7 @@ murmo
 Then:
 
 1. Just start talking — recording begins when speech is detected (silence before that is ignored).
-2. **Just stop talking** — 3 seconds of silence stops it automatically. Or press **Enter** to stop manually.
+2. **Just stop talking** — by default, 3 seconds of silence stops it automatically. Or press **Enter** to stop manually.
 3. Whisper transcribes the audio and prints the text in the terminal.
 
 The Whisper model is downloaded on first use, which can take a moment.
@@ -137,6 +137,8 @@ The Whisper model is downloaded on first use, which can take a moment.
 | `--append` | Append to the latest transcript in `--out` instead of creating a new file | off |
 | `--punctuate` | Enhance output with proper punctuation and capitalization | off |
 | `--file` | Transcribe an existing audio file instead of recording (requires ffmpeg) | — |
+| `--benchmark` | Measure transcription time for the current input | off |
+| `--benchmark-runs` | Number of timed transcription runs to execute with `--benchmark` | `3` |
 
 ### Recording options
 
@@ -144,6 +146,7 @@ The Whisper model is downloaded on first use, which can take a moment.
 |---|---|---|
 | `--silence-threshold` | dB level below which audio counts as silence | -30 |
 | `--silence-duration` | Seconds of silence before auto-stop | 3 |
+| `--no-silence-stop` | Disable silence-based auto-stop and keep recording until Enter (or `--max-duration`) | off |
 | `--max-duration` | Maximum recording time in seconds | 300 (5 min) |
 
 ### Examples
@@ -161,8 +164,17 @@ murmo --out ~/Documents/meeting --append
 # Transcribe an existing file with punctuation, English only
 murmo --file interview.m4a --language en --punctuate
 
+# Benchmark an existing file across 3 runs
+murmo --file interview.m4a --benchmark
+
+# Compare speed more reliably across 5 runs
+murmo --file interview.m4a --model base --language en --benchmark --benchmark-runs 5
+
 # Custom silence settings (picks up quieter speech, stops faster)
 murmo --silence-threshold -35 --silence-duration 1.5
+
+# Manual stop only: keep recording until you press Enter
+murmo --no-silence-stop
 ```
 
 ## Choosing a model
@@ -177,6 +189,8 @@ Bigger models are more accurate but slower. Whisper runs on the CPU on a Mac, so
 | `large` / `turbo` | slowest / fast for its size | best |
 
 Setting `--language` explicitly usually improves results compared to auto-detection.
+
+If you want reproducible performance numbers, benchmark the same file with the same language setting, for example with `--file interview.m4a --language en --benchmark`. Benchmark timings cover transcription only; recording, clipboard copy, and file output are not included.
 
 ## Troubleshooting
 
@@ -194,7 +208,8 @@ Setting `--language` explicitly usually improves results compared to auto-detect
   - **Windows:** Ensure FFmpeg is on your PATH.
 - **Wrong microphone is used** — The script uses the system default input. Change it in your OS sound settings.
 - **Very slow transcription** — Use a smaller model, e.g. `--model base`.
-- **Recording stops too early** — Lower `--silence-threshold` (e.g. `-40`) so quieter speech still counts, or use `--silence-duration 5`.
+- **Need hard numbers before changing models?** — Use `--benchmark`, ideally together with `--file`, and compare the same sample across models.
+- **Recording stops too early** — Lower `--silence-threshold` (e.g. `-40`) so quieter speech still counts, use `--silence-duration 5`, or disable silence auto-stop entirely with `--no-silence-stop`.
 - **Recording doesn't stop** — Background noise is above the threshold: raise `--silence-threshold` (e.g. `-25`) or decrease `--silence-duration`.
 - **FP16 is not supported on CPU** (macOS) — Harmless. The script already disables `fp16` for the Mac CPU.
 

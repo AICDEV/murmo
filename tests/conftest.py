@@ -6,6 +6,14 @@ import pytest
 import murmo
 
 
+@pytest.fixture(autouse=True)
+def _clear_model_cache():
+    """Keep the cached Whisper model isolated across tests."""
+    murmo._load_whisper_model.cache_clear()
+    yield
+    murmo._load_whisper_model.cache_clear()
+
+
 @pytest.fixture
 def mock_whisper():
     """Mock the Whisper model — returns a fixed transcript."""

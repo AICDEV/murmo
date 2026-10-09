@@ -28,3 +28,4 @@ build/
 # Testing
 .pytest_cache/
 .pytest
+/.idea/

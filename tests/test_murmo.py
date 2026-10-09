@@ -2,6 +2,7 @@
 
 import os
 import sys
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import numpy as np
@@ -424,6 +425,83 @@ class TestSilenceDetection:
         assert db > murmo.SILENCE_THRESHOLD_DB
 
 
+class TestRecordBehavior:
+    """Exercise the live recording state machine with a fake input stream."""
+
+    def test_record_stops_after_configured_silence(self, monkeypatch):
+        loud = np.full(1600, 0.5, dtype=np.float32)
+        silent = np.zeros(1600, dtype=np.float32)
+        scripted_chunks = [loud, silent, silent]
+        callback_holder = {}
+
+        class FakeInputStream:
+            def __init__(self, *, callback, **kwargs):
+                callback_holder["callback"] = callback
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class DummyThread:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def start(self):
+                pass
+
+        def fake_sleep(_interval):
+            if scripted_chunks:
+                chunk = scripted_chunks.pop(0)
+                callback_holder["callback"](chunk[:, None], len(chunk), None, None)
+
+        monkeypatch.setattr(murmo.sd, "InputStream", FakeInputStream)
+        monkeypatch.setattr(murmo.threading, "Thread", DummyThread)
+        monkeypatch.setattr(murmo.time, "sleep", fake_sleep)
+
+        audio = murmo.record(silence_duration=0.2, max_duration=5.0)
+
+        assert np.array_equal(audio, np.concatenate([loud, silent, silent]))
+
+    def test_record_without_silence_stop_waits_for_enter(self, monkeypatch):
+        loud = np.full(1600, 0.5, dtype=np.float32)
+        silent = np.zeros(1600, dtype=np.float32)
+        scripted_chunks = [loud, silent, silent]
+        callback_holder = {}
+        allow_enter = threading.Event()
+
+        class FakeInputStream:
+            def __init__(self, *, callback, **kwargs):
+                callback_holder["callback"] = callback
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        def fake_input():
+            allow_enter.wait(timeout=1)
+            return ""
+
+        def fake_sleep(_interval):
+            if scripted_chunks:
+                chunk = scripted_chunks.pop(0)
+                callback_holder["callback"](chunk[:, None], len(chunk), None, None)
+            else:
+                allow_enter.set()
+                threading.Event().wait(0.001)
+
+        monkeypatch.setattr(murmo.sd, "InputStream", FakeInputStream)
+        monkeypatch.setattr("builtins.input", fake_input)
+        monkeypatch.setattr(murmo.time, "sleep", fake_sleep)
+
+        audio = murmo.record(silence_duration=None, max_duration=5.0)
+
+        assert np.array_equal(audio, np.concatenate([loud, silent, silent]))
+
+
 class TestMainPunctuate:
     """Test --punctuate flag."""
 
@@ -504,6 +582,121 @@ class TestTranscribe:
         kwargs = mock_whisper.transcribe.call_args.kwargs
         assert kwargs["initial_prompt"] == murmo.PUNCTUATION_PROMPTS["en"]
 
+    def test_reuses_cached_model_for_same_name(self):
+        audio = np.zeros(murmo.SAMPLE_RATE, dtype=np.float32)
+        model = MagicMock()
+        model.device = "cpu"
+        model.dims = "mock"
+        model.transcribe.return_value = {"text": "cached"}
+
+        with patch("whisper.load_model", return_value=model) as mock_load:
+            assert murmo.transcribe(audio, "tiny", "en") == "cached"
+            assert murmo.transcribe(audio, "tiny", "en") == "cached"
+
+        assert mock_load.call_count == 1
+
+
+class TestBenchmarkTranscription:
+    """Benchmark helper behavior."""
+
+    def test_returns_stats_and_reuses_loaded_model(self, monkeypatch):
+        audio = np.zeros(murmo.SAMPLE_RATE, dtype=np.float32)
+        model = MagicMock()
+        model.device = "cpu"
+        model.dims = "mock"
+        model.transcribe.return_value = {"text": "bench"}
+
+        perf_values = iter([1.0, 1.2, 2.0, 2.3, 3.0, 3.1])
+        monkeypatch.setattr(murmo, "_load_whisper_model", MagicMock(return_value=model))
+        monkeypatch.setattr(murmo.time, "perf_counter", lambda: next(perf_values))
+
+        text, stats = murmo.benchmark_transcription(audio, "tiny", "en", runs=3)
+
+        assert text == "bench"
+        assert stats["runs"] == 3
+        assert stats["min"] == pytest.approx(0.1)
+        assert stats["avg"] == pytest.approx(0.2)
+        assert stats["max"] == pytest.approx(0.3)
+        murmo._load_whisper_model.assert_called_once_with("tiny")
+        assert model.transcribe.call_count == 3
+
+    def test_punctuate_uses_prompt(self, monkeypatch):
+        audio = np.zeros(murmo.SAMPLE_RATE, dtype=np.float32)
+        model = MagicMock()
+        model.device = "cpu"
+        model.dims = "mock"
+        model.transcribe.return_value = {"text": "bench"}
+
+        perf_values = iter([1.0, 1.1])
+        monkeypatch.setattr(murmo, "_load_whisper_model", MagicMock(return_value=model))
+        monkeypatch.setattr(murmo.time, "perf_counter", lambda: next(perf_values))
+
+        murmo.benchmark_transcription(audio, "tiny", "de", punctuate=True, runs=1)
+
+        kwargs = model.transcribe.call_args.kwargs
+        assert kwargs["initial_prompt"] == murmo.PUNCTUATION_PROMPTS["de"]
+
+
+class TestMainBenchmark:
+    """Benchmark-specific CLI behavior."""
+
+    @patch.object(murmo, "record")
+    @patch.object(murmo, "benchmark_transcription")
+    def test_benchmark_mode_uses_helper_in_record_mode(self, mock_benchmark, mock_record,
+                                                       tmp_path: Path, capsys):
+        mock_record.return_value = np.zeros(murmo.SAMPLE_RATE, dtype=np.float32)
+        mock_benchmark.return_value = ("bench text", {"runs": 3, "min": 1.0, "avg": 1.1, "max": 1.2})
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            murmo.main(["--benchmark"])
+        finally:
+            os.chdir(cwd)
+
+        mock_record.assert_called_once()
+        mock_benchmark.assert_called_once()
+        assert mock_benchmark.call_args.args[4] == 3
+        captured = capsys.readouterr()
+        assert "Benchmark: transcription only" in captured.out
+        assert "bench text" in captured.out
+
+    @patch.object(murmo, "benchmark_transcription")
+    def test_benchmark_mode_file_output_stays_plain_transcript(self, mock_benchmark, tmp_path: Path, capsys):
+        fake_file = tmp_path / "sample.m4a"
+        fake_file.write_bytes(b"audio")
+        mock_benchmark.return_value = ("bench file text", {"runs": 2, "min": 0.5, "avg": 0.6, "max": 0.7})
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            murmo.main(["--file", str(fake_file), "--out", "recordings", "--benchmark", "--benchmark-runs", "2"])
+        finally:
+            os.chdir(cwd)
+
+        mock_benchmark.assert_called_once_with(str(fake_file), "small", None, False, 2)
+        txt_files = list((tmp_path / "recordings").glob("*.txt"))
+        assert len(txt_files) == 1
+        content = txt_files[0].read_text(encoding="utf-8")
+        assert "bench file text" in content
+        assert "Benchmark:" not in content
+        captured = capsys.readouterr()
+        assert "Benchmark: transcription only" in captured.out
+
+    def test_benchmark_runs_requires_benchmark(self, capsys):
+        with pytest.raises(SystemExit) as excinfo:
+            murmo.main(["--benchmark-runs", "2"])
+
+        assert excinfo.value.code == 2
+        assert "requires --benchmark" in capsys.readouterr().err
+
+    def test_benchmark_runs_must_be_positive(self, capsys):
+        with pytest.raises(SystemExit) as excinfo:
+            murmo.main(["--benchmark", "--benchmark-runs", "0"])
+
+        assert excinfo.value.code == 2
+        assert "at least 1" in capsys.readouterr().err
+
 
 class TestMainRecordingOptions:
     """Test recording-related arguments."""
@@ -541,6 +734,23 @@ class TestMainRecordingOptions:
 
         mock_record.assert_called_once()
         assert mock_record.call_args.kwargs["silence_duration"] == 5.0
+
+    @patch.object(murmo, "record")
+    @patch.object(murmo, "transcribe")
+    def test_no_silence_stop_disables_auto_stop(self, mock_transcribe, mock_record, tmp_path: Path):
+        """--no-silence-stop should disable silence-based auto-stop."""
+        mock_record.return_value = np.zeros(murmo.SAMPLE_RATE, dtype=np.float32)
+        mock_transcribe.return_value = "ok"
+
+        cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            murmo.main(["--no-silence-stop"])
+        finally:
+            os.chdir(cwd)
+
+        mock_record.assert_called_once()
+        assert mock_record.call_args.kwargs["silence_duration"] is None
 
     @patch.object(murmo, "record")
     @patch.object(murmo, "transcribe")
